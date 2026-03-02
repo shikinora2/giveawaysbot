@@ -167,6 +167,11 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     if (interaction.commandName !== 'giveaway') return;
 
+    // Kiểm tra quyền Admin (double-check phía server)
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        return interaction.reply({ content: '🔒 Bạn không có quyền sử dụng lệnh này!', ephemeral: true });
+    }
+
     const sub = interaction.options.getSubcommand();
     let db = getData();
 
@@ -238,19 +243,20 @@ client.on('interactionCreate', async interaction => {
         const endTimestamp = isManual ? null : Date.now() + durationMs;
 
         const embed = new EmbedBuilder()
-            .setTitle('🎉 GIVEAWAY BẮT ĐẦU! 🎉')
+            .setTitle(`🎉 ${title} 🎉`)
             .setColor('#5865F2')
             .addFields(
-                { name: '📌 Tiêu đề', value: title, inline: false },
                 { name: '🎁 Phần thưởng', value: `**${prize}**`, inline: true },
                 { name: '👥 Số người thắng', value: `${winnersCount}`, inline: true },
-                { name: '🆔 Mã Giveaway', value: `\`#${currentID}\``, inline: true },
-                { name: '⌛ Kết thúc', value: isManual ? '🖐 Admin sẽ chốt thủ công (`/giveaway end ' + currentID + '`)' : `<t:${Math.floor(endTimestamp / 1000)}:R> (<t:${Math.floor(endTimestamp / 1000)}:f>)`, inline: false }
+                { name: '⌛ Kết thúc', value: isManual
+                    ? '🖐 Kết thúc khi Admin chốt'
+                    : `<t:${Math.floor(endTimestamp / 1000)}:R>  *(${new Date(endTimestamp).toLocaleString('vi-VN')})*`,
+                    inline: false }
             )
-            .setFooter({ text: '👇 Nhấn nút bên dưới để tham gia!' })
+            .setFooter({ text: `👇 Nhấn nút bên dưới để tham gia! • ID quản lý: #${currentID}` })
             .setTimestamp();
 
-        if (description) embed.setDescription(description);
+        if (description) embed.setDescription(`> ${description}`);
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -423,11 +429,34 @@ async function finishGiveaway(id, shouldDraw) {
     const dateStr = new Date().toLocaleString('vi-VN');
 
     if (shouldDraw) {
-        // Xáo trộn & chọn ngẫu nhiên
-        const shuffled = [...gw.participants].sort(() => Math.random() - 0.5);
+        // Chuẩn hoá participants: hỗ trợ cả format cũ (string) lẫn mới (object)
+        const normalizedParticipants = gw.participants.map(p =>
+            typeof p === 'string' ? { userId: p, username: p } : p
+        ).filter(p => p && p.userId); // lọc bỏ entry rỗng/lỗi
+
+        if (normalizedParticipants.length === 0) {
+            // Không có ai tham gia
+            const noOneEmbed = new EmbedBuilder()
+                .setTitle(`🎁 ${gw.title} — KẾT THÚC!`)
+                .setColor('#99AAB5')
+                .setDescription('😔 Không có ai tham gia giveaway này.')
+                .addFields({ name: '🎁 Phần thưởng', value: gw.prize })
+                .setFooter({ text: `Ngày chốt: ${dateStr}` })
+                .setTimestamp();
+            if (gw.description) noOneEmbed.setDescription(`> ${gw.description}\n\n😔 Không có ai tham gia giveaway này.`);
+            if (message) await message.edit({ embeds: [noOneEmbed], components: [] });
+            if (activeCollectors.has(id)) { activeCollectors.get(id).stop(); activeCollectors.delete(id); }
+            db.active.splice(index, 1);
+            saveData(db);
+            return true;
+        }
+
+        // Xáo trộn & chọn ngẫu nhiên CHỈ trong danh sách người đã nhấn nút
+        const shuffled = [...normalizedParticipants].sort(() => Math.random() - 0.5);
         const winnerEntries = shuffled.slice(0, gw.winnersCount);
 
         // Lưu lịch sử kèm đầy đủ thông tin
+        console.log(`🎲 Giveaway #${id} — ${normalizedParticipants.length} người tham gia, chọn ${winnerEntries.length} người thắng`);
         for (const entry of winnerEntries) {
             db.past_winners.push({
                 id,
@@ -448,18 +477,16 @@ async function finishGiveaway(id, shouldDraw) {
             : '—';
 
         const resultEmbed = new EmbedBuilder()
-            .setTitle('🎁 GIVEAWAY KẾT THÚC!')
-            .setColor('#2F3136')
+            .setTitle(`🎁 ${gw.title} — KẾT THÚC!`)
+            .setColor('#F1C40F')
             .addFields(
-                { name: '📌 Tiêu đề', value: gw.title },
                 { name: '🎁 Phần thưởng', value: gw.prize, inline: true },
-                { name: '🆔 Mã Giveaway', value: `\`#${id}\``, inline: true },
-                { name: '🏆 Người thắng', value: `${winnerMentions}\n${winnerNames}`, inline: false }
+                { name: '🏆 Người thắng', value: `${winnerMentions}`, inline: false }
             )
             .setFooter({ text: `Ngày chốt: ${dateStr}` })
             .setTimestamp();
 
-        if (gw.description) resultEmbed.setDescription(gw.description);
+        if (gw.description) resultEmbed.setDescription(`> ${gw.description}`);
 
         if (message) await message.edit({ embeds: [resultEmbed], components: [] });
 
@@ -471,10 +498,10 @@ async function finishGiveaway(id, shouldDraw) {
     } else {
         // Hủy
         const cancelEmbed = new EmbedBuilder()
-            .setTitle('🚫 GIVEAWAY ĐÃ BỊ HỦY')
-            .setDescription(`**${gw.title}** đã bị hủy bởi Quản trị viên.\n🎁 Phần thưởng: ${gw.prize}`)
+            .setTitle(`🚫 ${gw.title} — ĐÃ HỦY`)
+            .setDescription(`Giveaway này đã bị hủy bởi Quản trị viên.\n🎁 Phần thưởng: **${gw.prize}**`)
             .setColor('#FF0000')
-            .setFooter({ text: `Hủy lúc: ${dateStr} | ID #${id}` });
+            .setFooter({ text: `Hủy lúc: ${dateStr}` });
 
         if (message) await message.edit({ embeds: [cancelEmbed], components: [] });
     }
