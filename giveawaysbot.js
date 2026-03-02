@@ -1,4 +1,4 @@
-require('dotenv').config();
+﻿require('dotenv').config();
 
 const {
     Client,
@@ -9,7 +9,8 @@ const {
     ComponentType,
     ActionRowBuilder,
     ButtonBuilder,
-    ButtonStyle
+    ButtonStyle,
+    MessageFlags
 } = require('discord.js');
 const fs = require('fs');
 const ms = require('ms');
@@ -169,7 +170,7 @@ client.on('interactionCreate', async interaction => {
 
     // Kiểm tra quyền Admin (double-check phía server)
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-        return interaction.reply({ content: '🔒 Bạn không có quyền sử dụng lệnh này!', ephemeral: true });
+        return interaction.reply({ content: '🔒 Bạn không có quyền sử dụng lệnh này!', flags: MessageFlags.Ephemeral });
     }
 
     const sub = interaction.options.getSubcommand();
@@ -189,13 +190,13 @@ client.on('interactionCreate', async interaction => {
                 { name: '`/giveaway history`', value: 'Xem lịch sử người đã trúng giải.' }
             )
             .setFooter({ text: 'ID giveaway là số thứ tự: 1, 2, 3...' });
-        return interaction.reply({ embeds: [embed], ephemeral: true });
+        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     // ── 2. LIST ──────────────────────────────
     if (sub === 'list') {
         if (db.active.length === 0)
-            return interaction.reply({ content: '📭 Không có giveaway nào đang chạy.', ephemeral: true });
+            return interaction.reply({ content: '📭 Không có giveaway nào đang chạy.', flags: MessageFlags.Ephemeral });
 
         const lines = db.active.map(g => {
             const endInfo = g.endTime
@@ -204,13 +205,13 @@ client.on('interactionCreate', async interaction => {
             return `\`#${g.id}\` **${g.title}** — 🎁 ${g.prize} | 👥 ${g.participants.length} tham gia | ${endInfo}`;
         }).join('\n');
 
-        return interaction.reply({ content: `**📋 Danh sách Giveaway đang chạy:**\n${lines}`, ephemeral: true });
+        return interaction.reply({ content: `**📋 Danh sách Giveaway đang chạy:**\n${lines}`, flags: MessageFlags.Ephemeral });
     }
 
     // ── 3. HISTORY ───────────────────────────
     if (sub === 'history') {
         if (db.past_winners.length === 0)
-            return interaction.reply({ content: '📭 Chưa có lịch sử trúng giải.', ephemeral: true });
+            return interaction.reply({ content: '📭 Chưa có lịch sử trúng giải.', flags: MessageFlags.Ephemeral });
 
         const lines = db.past_winners.slice(-20).reverse().map(h =>
             `📅 **${h.date}** | 🆔 #${h.id} | 👤 <@${h.userId}> (${h.username}) | 🎁 **${h.prize}**`
@@ -222,7 +223,7 @@ client.on('interactionCreate', async interaction => {
             .setDescription(lines)
             .setFooter({ text: 'Hiển thị 20 lần gần nhất' });
 
-        return interaction.reply({ embeds: [embed], ephemeral: true });
+        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     // ── 4. START ──────────────────────────────
@@ -237,7 +238,7 @@ client.on('interactionCreate', async interaction => {
         const durationMs = isManual ? 0 : ms(durationInput);
 
         if (!isManual && !durationMs)
-            return interaction.reply({ content: '❌ Thời gian không hợp lệ! Dùng `10m`, `1h`, `2d`...', ephemeral: true });
+            return interaction.reply({ content: '❌ Thời gian không hợp lệ! Dùng `10m`, `1h`, `2d`...', flags: MessageFlags.Ephemeral });
 
         const currentID = db.counter++;
         const endTimestamp = isManual ? null : Date.now() + durationMs;
@@ -266,13 +267,14 @@ client.on('interactionCreate', async interaction => {
                 .setStyle(ButtonStyle.Primary)
         );
 
-        const msg = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
+        const response = await interaction.reply({ embeds: [embed], components: [row], withResponse: true });
+        const msg = response.resource.message;
 
         db.active.push({
             id: currentID,
             messageId: msg.id,
-            channelId: msg.channel.id,
-            guildId: msg.guild.id,
+            channelId: interaction.channelId,
+            guildId: interaction.guildId,
             title,
             prize,
             description,
@@ -285,7 +287,9 @@ client.on('interactionCreate', async interaction => {
         });
         saveData(db);
 
-        createBtnCollector(currentID, msg);
+        // Fetch message đầy đủ để tạo collector nút bấm
+        const fullMsg = await interaction.fetchReply();
+        createBtnCollector(currentID, fullMsg);
 
         if (!isManual) {
             setTimeout(() => finishGiveaway(currentID, true), durationMs);
@@ -356,7 +360,7 @@ client.on('interactionCreate', async interaction => {
     // ── 6. END ───────────────────────────────
     if (sub === 'end') {
         const id = interaction.options.getInteger('id');
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const success = await finishGiveaway(id, true);
         return interaction.editReply(
             success ? `✅ Đã chốt và công bố kết quả giveaway \`#${id}\`!` : `❌ Không tìm thấy giveaway \`#${id}\`. Dùng \`/giveaway list\` để kiểm tra.`
@@ -366,7 +370,7 @@ client.on('interactionCreate', async interaction => {
     // ── 7. CANCEL ────────────────────────────
     if (sub === 'cancel') {
         const id = interaction.options.getInteger('id');
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         if (id !== null) {
             // Hủy 1 giveaway theo ID
@@ -397,11 +401,11 @@ function createBtnCollector(id, message) {
     collector.on('collect', async i => {
         const db = getData();
         const gw = db.active.find(g => g.id === id);
-        if (!gw) return i.reply({ content: '❌ Giveaway này đã kết thúc!', ephemeral: true });
+        if (!gw) return i.reply({ content: '❌ Giveaway này đã kết thúc!', flags: MessageFlags.Ephemeral });
 
         const alreadyJoined = gw.participants.some(p => p.userId === i.user.id);
         if (alreadyJoined)
-            return i.reply({ content: '⚠️ Bạn đã tham gia giveaway này rồi!', ephemeral: true });
+            return i.reply({ content: '⚠️ Bạn đã tham gia giveaway này rồi!', flags: MessageFlags.Ephemeral });
 
         // Lưu cả userId lẫn username
         gw.participants.push({
@@ -411,7 +415,7 @@ function createBtnCollector(id, message) {
         });
         saveData(db);
 
-        i.reply({ content: `✅ Đã đăng ký tham gia **Giveaway #${id}**! Chúc bạn may mắn 🍀`, ephemeral: true });
+        i.reply({ content: `✅ Đã đăng ký tham gia **Giveaway #${id}**! Chúc bạn may mắn 🍀`, flags: MessageFlags.Ephemeral });
     });
 }
 
