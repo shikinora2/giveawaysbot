@@ -37,14 +37,35 @@ const client = new Client({
 // =============================================
 //   QUẢN LÝ DATABASE (JSON)
 // =============================================
+const DEFAULT_DB = { counter: 1, active: [], past_winners: [] };
+
 function initDB() {
     if (!fs.existsSync(DB_PATH)) {
-        fs.writeFileSync(DB_PATH, JSON.stringify({ counter: 1, active: [], past_winners: [] }, null, 2));
+        fs.writeFileSync(DB_PATH, JSON.stringify(DEFAULT_DB, null, 2), 'utf8');
+        return;
+    }
+    // Nếu file rỗng hoặc corrupt → reset lại
+    try {
+        const raw = fs.readFileSync(DB_PATH, 'utf8').trim();
+        if (!raw) throw new Error('empty');
+        JSON.parse(raw); // thử parse để kiểm tra
+    } catch {
+        console.warn('⚠️  giveaways.json bị lỗi, tạo lại...');
+        fs.writeFileSync(DB_PATH, JSON.stringify(DEFAULT_DB, null, 2), 'utf8');
     }
 }
 
 function getData() {
-    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+    try {
+        const raw = fs.readFileSync(DB_PATH, 'utf8').trim();
+        if (!raw) throw new Error('empty');
+        return JSON.parse(raw);
+    } catch {
+        console.warn('⚠️  Không đọc được DB, dùng dữ liệu mặc định.');
+        const fresh = { ...DEFAULT_DB };
+        fs.writeFileSync(DB_PATH, JSON.stringify(fresh, null, 2), 'utf8');
+        return fresh;
+    }
 }
 
 function saveData(data) {
@@ -57,7 +78,7 @@ const activeCollectors = new Map();
 // =============================================
 //   KHỞI ĐỘNG BOT & ĐĂNG KÝ SLASH COMMANDS
 // =============================================
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     initDB();
     console.log(`✅ Bot Giveaway đã sẵn sàng: ${client.user.tag}`);
 
