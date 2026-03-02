@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Biến môi trường (KHÔNG được commit lên Git)
+.env
+
+# Log files
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
